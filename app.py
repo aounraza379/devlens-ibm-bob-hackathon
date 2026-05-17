@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple
 import json
 from datetime import datetime
 import re
+from pathlib import Path
 
 # NLP and ML imports
 try:
@@ -79,6 +80,116 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# ============================================================================
+# REPOSITORY SCANNER UTILITY
+# ============================================================================
+
+class RepositoryScanner:
+    """Scans local repository folders and extracts code files"""
+    
+    SUPPORTED_EXTENSIONS = {
+        '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h', 
+        '.cs', '.go', '.rs', '.php', '.rb', '.swift', '.kt', '.scala',
+        '.html', '.css', '.vue', '.svelte'
+    }
+    
+    IGNORE_DIRS = {
+        'venv', '.venv', 'env', '.env', 'node_modules', '.git', '__pycache__',
+        '.pytest_cache', '.mypy_cache', 'dist', 'build', '.next', '.nuxt',
+        'target', 'bin', 'obj', '.idea', '.vscode', 'coverage'
+    }
+    
+    def __init__(self):
+        self.scanned_files = []
+        self.total_lines = 0
+        self.file_count = 0
+    
+    def scan_repository(self, repo_path: str) -> Dict:
+        """
+        Recursively scan a repository and extract all code files
+        
+        Args:
+            repo_path: Path to the repository root
+            
+        Returns:
+            Dictionary containing scanned files and metadata
+        """
+        self.scanned_files = []
+        self.total_lines = 0
+        self.file_count = 0
+        
+        # Normalize path
+        repo_path = os.path.normpath(repo_path.strip())
+        
+        if not os.path.exists(repo_path):
+            return {
+                "success": False,
+                "error": f"Path does not exist: {repo_path}",
+                "files": [],
+                "stats": {}
+            }
+        
+        if not os.path.isdir(repo_path):
+            return {
+                "success": False,
+                "error": f"Path is not a directory: {repo_path}",
+                "files": [],
+                "stats": {}
+            }
+        
+        try:
+            # Walk through directory
+            for root, dirs, files in os.walk(repo_path):
+                # Filter out ignored directories
+                dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]
+                
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    file_ext = os.path.splitext(file)[1].lower()
+                    
+                    # Check if file extension is supported
+                    if file_ext in self.SUPPORTED_EXTENSIONS:
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                lines = len(content.split('\n'))
+                                
+                                # Get relative path from repo root
+                                rel_path = os.path.relpath(file_path, repo_path)
+                                
+                                self.scanned_files.append({
+                                    "filename": file,
+                                    "relative_path": rel_path,
+                                    "full_path": file_path,
+                                    "content": content,
+                                    "lines": lines,
+                                    "extension": file_ext
+                                })
+                                
+                                self.total_lines += lines
+                                self.file_count += 1
+                        except Exception as e:
+                            # Skip files that can't be read
+                            continue
+            
+            return {
+                "success": True,
+                "files": self.scanned_files,
+                "stats": {
+                    "total_files": self.file_count,
+                    "total_lines": self.total_lines,
+                    "repo_path": repo_path
+                }
+            }
+        
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "files": [],
+                "stats": {}
+            }
 
 # ============================================================================
 # ENGINE A: SENTIMENT ANALYSIS ENGINE
@@ -305,7 +416,7 @@ class CodeSummarizer:
 # ============================================================================
 
 class PlaybookGenerator:
-    """Generates onboarding playbooks from code summaries"""
+    """Generates onboarding playbooks from code summaries using deep Groq AI"""
     
     def __init__(self, api_key=None):
         self.api_key = api_key
@@ -319,53 +430,119 @@ class PlaybookGenerator:
             except Exception as e:
                 st.warning(f"Groq client initialization failed: {e}")
     
-    def generate_playbook(self, summaries: List[Dict], project_name: str = "Project") -> str:
-        """Generate a markdown onboarding playbook"""
+    def generate_playbook(self, repo_analysis: Dict, project_name: str = "Project") -> str:
+        """
+        Generate a comprehensive markdown onboarding playbook using Groq AI
         
-        if not summaries:
+        Args:
+            repo_analysis: Complete repository analysis data from session state
+            project_name: Name of the project
+            
+        Returns:
+            Markdown formatted playbook
+        """
+        
+        if not repo_analysis or 'summaries' not in repo_analysis:
             return "# Onboarding Playbook\n\nNo code summaries available."
         
-        # Try Groq for better quality
+        summaries = repo_analysis['summaries']
+        
+        # Use Groq for deep AI generation
         if self.use_groq and self.groq_client:
             try:
-                summary_text = "\n".join([
-                    f"- {s['filename']}: {s['summary']}" for s in summaries
-                ])
+                # Prepare comprehensive context for the LLM
+                context = self._prepare_context(summaries, repo_analysis)
                 
+                # Create detailed prompt for deep analysis
+                prompt = f"""You are a senior software architect creating a comprehensive Developer Onboarding Playbook for "{project_name}".
+
+Based on the complete repository analysis below, generate a beautiful, detailed, multi-section Markdown playbook that includes:
+
+1. **Architecture Overview**: High-level system design and key components
+2. **Module Relationships**: How different parts of the codebase interact
+3. **Technical Stack**: Technologies, frameworks, and dependencies used
+4. **Code Organization**: Directory structure and file organization patterns
+5. **Complexity Analysis**: Areas of high complexity and potential technical debt
+6. **Step-by-Step Environment Setup**: Detailed setup instructions
+7. **Development Workflow**: How to contribute and best practices
+8. **Key Entry Points**: Where to start reading the code
+
+Repository Analysis:
+{context}
+
+Generate a professional, well-structured playbook with clear sections, code examples where relevant, and actionable guidance for new developers."""
+
                 chat_completion = self.groq_client.chat.completions.create(
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a technical documentation expert. Create clear, structured onboarding guides in markdown format."
+                            "content": "You are a senior software architect and technical writer. Create comprehensive, well-structured developer onboarding documentation in beautiful Markdown format."
                         },
                         {
                             "role": "user",
-                            "content": f"Create an onboarding playbook for '{project_name}' based on these code summaries:\n\n{summary_text}"
+                            "content": prompt
                         }
                     ],
                     model="llama-3.3-70b-versatile",
-                    temperature=0.5,
-                    max_tokens=1000
+                    temperature=0.6,
+                    max_tokens=4000
                 )
+                
                 return chat_completion.choices[0].message.content.strip()
+                
             except Exception as e:
-                st.warning(f"Groq API error, using template: {e}")
+                st.error(f"Groq API error: {e}")
+                return self._generate_fallback_playbook(summaries, project_name, repo_analysis)
+        else:
+            # Fallback if no API key
+            return self._generate_fallback_playbook(summaries, project_name, repo_analysis)
+    
+    def _prepare_context(self, summaries: List[Dict], repo_analysis: Dict) -> str:
+        """Prepare comprehensive context for LLM"""
+        context_parts = []
         
-        # Fallback: template-based generation
+        # Repository statistics
+        stats = repo_analysis.get('stats', {})
+        context_parts.append(f"Total Files: {stats.get('total_files', 0)}")
+        context_parts.append(f"Total Lines of Code: {stats.get('total_lines', 0)}")
+        context_parts.append(f"Repository Path: {stats.get('repo_path', 'N/A')}\n")
+        
+        # File summaries with full details
+        context_parts.append("File Analysis:")
+        for i, summary in enumerate(summaries, 1):
+            context_parts.append(f"\n{i}. {summary['filename']}")
+            context_parts.append(f"   Path: {summary.get('relative_path', 'N/A')}")
+            context_parts.append(f"   Lines: {summary['lines']}")
+            context_parts.append(f"   Complexity: {summary['complexity']}")
+            context_parts.append(f"   Summary: {summary['summary']}")
+            
+            structure = summary.get('structure', {})
+            if structure.get('classes'):
+                context_parts.append(f"   Classes: {', '.join(structure['classes'][:10])}")
+            if structure.get('functions'):
+                context_parts.append(f"   Functions: {', '.join(structure['functions'][:15])}")
+            if structure.get('imports'):
+                context_parts.append(f"   Key Imports: {', '.join(structure['imports'][:5])}")
+        
+        return "\n".join(context_parts)
+    
+    def _generate_fallback_playbook(self, summaries: List[Dict], project_name: str, repo_analysis: Dict) -> str:
+        """Generate template-based playbook as fallback"""
         playbook = f"# {project_name} - Developer Onboarding Playbook\n\n"
         playbook += f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
         playbook += "---\n\n"
         
-        playbook += "## 📋 Project Overview\n\n"
-        playbook += f"This project consists of {len(summaries)} main file(s). "
+        stats = repo_analysis.get('stats', {})
         
-        total_lines = sum(s.get('lines', 0) for s in summaries)
-        playbook += f"Total lines of code: ~{total_lines}\n\n"
+        playbook += "## Project Overview\n\n"
+        playbook += f"This project consists of {stats.get('total_files', len(summaries))} file(s). "
+        playbook += f"Total lines of code: ~{stats.get('total_lines', sum(s.get('lines', 0) for s in summaries))}\n\n"
         
-        playbook += "## 🏗️ Architecture Summary\n\n"
+        playbook += "## Architecture Summary\n\n"
         
         for summary in summaries:
             playbook += f"### {summary['filename']}\n\n"
+            playbook += f"**Path:** `{summary.get('relative_path', summary['filename'])}`\n\n"
             playbook += f"**Complexity:** {summary.get('complexity', 'Unknown')}\n\n"
             playbook += f"**Summary:** {summary['summary']}\n\n"
             
@@ -377,14 +554,14 @@ class PlaybookGenerator:
             
             playbook += "---\n\n"
         
-        playbook += "## 🚀 Getting Started\n\n"
+        playbook += "## Getting Started\n\n"
         playbook += "1. **Clone the repository** and set up your development environment\n"
         playbook += "2. **Review the architecture** - Start with the main entry points\n"
         playbook += "3. **Understand dependencies** - Check import statements and requirements\n"
         playbook += "4. **Run tests** - Ensure everything works in your environment\n"
         playbook += "5. **Make your first contribution** - Start with small, well-defined tasks\n\n"
         
-        playbook += "## 📚 Key Components\n\n"
+        playbook += "## Key Components\n\n"
         
         all_classes = []
         all_functions = []
@@ -400,14 +577,14 @@ class PlaybookGenerator:
         if all_functions:
             playbook += f"**Key Functions:** {', '.join(set(all_functions[:10]))}\n\n"
         
-        playbook += "## 💡 Best Practices\n\n"
+        playbook += "## Best Practices\n\n"
         playbook += "- Follow the existing code style and conventions\n"
         playbook += "- Write clear commit messages\n"
         playbook += "- Add tests for new features\n"
         playbook += "- Document complex logic\n"
         playbook += "- Ask questions when unsure\n\n"
         
-        playbook += "## 🤝 Contributing\n\n"
+        playbook += "## Contributing\n\n"
         playbook += "1. Create a feature branch\n"
         playbook += "2. Make your changes\n"
         playbook += "3. Test thoroughly\n"
@@ -426,13 +603,17 @@ class PlaybookGenerator:
 def main():
     """Main application entry point"""
     
+    # Initialize session state for repo analysis
+    if 'repo_analysis' not in st.session_state:
+        st.session_state.repo_analysis = None
+    
     # Header
-    st.markdown('<div class="main-header">🔍 DevLens</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">DevLens</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Repository Intelligence & Team Health Dashboard</div>', unsafe_allow_html=True)
     
     # Sidebar configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("Configuration")
         
         # API Key input (optional)
         api_key = st.text_input(
@@ -441,8 +622,11 @@ def main():
             help="For enhanced summarization and playbook generation using Groq's fast LLM inference"
         )
         
+        if not api_key:
+            st.warning("No Groq API key provided. Using fallback templates for playbook generation.")
+        
         st.markdown("---")
-        st.markdown("### 📊 About DevLens")
+        st.markdown("### About DevLens")
         st.markdown("""
         DevLens provides comprehensive engineering health checks:
         
@@ -462,12 +646,13 @@ def main():
     sentiment_analyzer = SentimentAnalyzer()
     code_summarizer = CodeSummarizer(api_key if api_key else None)
     playbook_generator = PlaybookGenerator(api_key if api_key else None)
+    repo_scanner = RepositoryScanner()
     
     # Main tabs
     tab1, tab2, tab3 = st.tabs([
-        "📊 Team Sentiment Analytics",
-        "🏗️ Codebase Architecture Summarizer",
-        "📖 Automated Playbook Generator"
+        "Team Sentiment Analytics",
+        "Codebase Architecture Summarizer",
+        "Automated Playbook Generator"
     ])
     
     # ========================================================================
@@ -508,7 +693,7 @@ def main():
                     content = uploaded_file.read().decode('utf-8')
                     commits = [line.strip() for line in content.split('\n') if line.strip()]
             
-            if st.button("🔍 Analyze Sentiment", type="primary", use_container_width=True):
+            if st.button("Analyze Sentiment", type="primary", use_container_width=True):
                 if commits:
                     with st.spinner("Analyzing sentiment..."):
                         results = sentiment_analyzer.analyze_commits(commits)
@@ -532,7 +717,7 @@ def main():
             results = st.session_state['sentiment_results']
             
             st.markdown("---")
-            st.subheader("📈 Sentiment Distribution")
+            st.subheader("Sentiment Distribution")
             
             # Create visualization
             col1, col2 = st.columns(2)
@@ -577,7 +762,7 @@ def main():
                 st.plotly_chart(fig_bar, use_container_width=True)
             
             # Detailed results
-            st.subheader("📝 Detailed Analysis")
+            st.subheader("Detailed Analysis")
             
             for i, detail in enumerate(results['details'], 1):
                 sentiment_class = "positive" if detail['sentiment'] == "Positive" else "negative" if detail['sentiment'] == "Frustrated/Toxic" else "neutral"
@@ -590,7 +775,7 @@ def main():
             
             # Export option
             st.markdown("---")
-            if st.button("📥 Export Results as JSON"):
+            if st.button("Export Results as JSON"):
                 json_str = json.dumps(results, indent=2)
                 st.download_button(
                     label="Download JSON",
@@ -604,11 +789,64 @@ def main():
     # ========================================================================
     with tab2:
         st.header("Codebase Architecture Summarizer")
-        st.markdown("Upload source code files to get clear architectural summaries and insights.")
+        st.markdown("Scan a local repository or upload source code files to get clear architectural summaries and insights.")
         
+        # Repository folder scanning section
+        st.subheader("Local Repository Scanner")
+        st.info("**Note:** This scans LOCAL repositories on your computer. To analyze a GitHub repository, first clone it to your local machine using: `git clone <repository-url>`")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            repo_path = st.text_input(
+                "Enter Local Repository Path:",
+                placeholder="Example: C:/Users/YourName/Projects/my-repo",
+                help="Enter the full path to your local repository folder. Works with any cloned GitHub repo or local project."
+            )
+            
+            # Show current working directory as reference
+            st.caption(f"Current working directory: {os.getcwd()}")
+        
+        with col2:
+            st.markdown("###")
+            if st.button("Scan Repository", type="primary", use_container_width=True):
+                if repo_path:
+                    with st.spinner(f"Scanning repository: {repo_path}..."):
+                        scan_result = repo_scanner.scan_repository(repo_path)
+                        
+                        if scan_result['success']:
+                            st.success(f"Successfully scanned {scan_result['stats']['total_files']} files!")
+                            
+                            # Analyze all scanned files
+                            with st.spinner("Analyzing code structure..."):
+                                summaries = []
+                                for file_data in scan_result['files']:
+                                    summary = code_summarizer.summarize_code(
+                                        file_data['content'],
+                                        file_data['filename']
+                                    )
+                                    summary['relative_path'] = file_data['relative_path']
+                                    summaries.append(summary)
+                                
+                                # Store in session state
+                                st.session_state.repo_analysis = {
+                                    'summaries': summaries,
+                                    'stats': scan_result['stats']
+                                }
+                                st.session_state['code_summaries'] = summaries
+                        else:
+                            st.error(f"Error: {scan_result['error']}")
+                            st.info("**Troubleshooting Tips:**\n- Ensure the path exists and is correct\n- Use forward slashes (/) or double backslashes (\\\\)\n- Check that you have read permissions for the directory")
+                else:
+                    st.warning("Please enter a repository path.")
+        
+        st.markdown("---")
+        
+        # Manual file upload section
         col1, col2 = st.columns([2, 1])
         
         with col1:
+            st.subheader("Manual File Upload")
             input_method = st.radio(
                 "Input Method:",
                 ["Paste Code", "Upload Files"],
@@ -644,7 +882,7 @@ def main():
                             "content": content
                         })
             
-            if st.button("🔍 Analyze Code", type="primary", use_container_width=True):
+            if st.button("Analyze Code", type="secondary", use_container_width=True):
                 if code_files:
                     with st.spinner("Analyzing code structure..."):
                         summaries = []
@@ -656,30 +894,42 @@ def main():
                             )
                             summaries.append(summary)
                         
-                        st.session_state['code_summaries'] = summaries
+                        # Update session state
+                        if st.session_state.repo_analysis:
+                            st.session_state.repo_analysis['summaries'].extend(summaries)
+                        else:
+                            st.session_state.repo_analysis = {
+                                'summaries': summaries,
+                                'stats': {
+                                    'total_files': len(summaries),
+                                    'total_lines': sum(s['lines'] for s in summaries)
+                                }
+                            }
+                        st.session_state['code_summaries'] = st.session_state.repo_analysis['summaries']
                 else:
                     st.warning("Please provide code to analyze.")
         
         with col2:
             st.markdown("### Quick Stats")
-            if 'code_summaries' in st.session_state:
-                summaries = st.session_state['code_summaries']
+            if st.session_state.repo_analysis:
+                stats = st.session_state.repo_analysis.get('stats', {})
+                summaries = st.session_state.repo_analysis.get('summaries', [])
                 
-                total_lines = sum(s['lines'] for s in summaries)
+                st.metric("Files Analyzed", stats.get('total_files', len(summaries)))
+                st.metric("Total Lines", stats.get('total_lines', sum(s['lines'] for s in summaries)))
+                
                 total_classes = sum(len(s['structure']['classes']) for s in summaries)
                 total_functions = sum(len(s['structure']['functions']) for s in summaries)
                 
-                st.metric("Files Analyzed", len(summaries))
-                st.metric("Total Lines", total_lines)
                 st.metric("Classes", total_classes)
                 st.metric("Functions", total_functions)
         
         # Display results
-        if 'code_summaries' in st.session_state:
-            summaries = st.session_state['code_summaries']
+        if st.session_state.repo_analysis:
+            summaries = st.session_state.repo_analysis['summaries']
             
             st.markdown("---")
-            st.subheader("📊 Code Analysis Results")
+            st.subheader("Code Analysis Results")
             
             # Complexity distribution
             complexity_counts = {}
@@ -701,10 +951,12 @@ def main():
                 st.plotly_chart(fig_complexity, use_container_width=True)
             
             # Detailed summaries
-            st.subheader("📝 File Summaries")
+            st.subheader("File Summaries")
             
             for summary in summaries:
-                with st.expander(f"📄 {summary['filename']} - {summary['complexity']} Complexity"):
+                with st.expander(f"{summary['filename']} - {summary['complexity']} Complexity"):
+                    if 'relative_path' in summary:
+                        st.markdown(f"**Path:** `{summary['relative_path']}`")
                     st.markdown(f"**Summary:** {summary['summary']}")
                     st.markdown(f"**Lines of Code:** {summary['lines']}")
                     st.markdown(f"**Complexity:** {summary['complexity']}")
@@ -733,13 +985,62 @@ def main():
     # ========================================================================
     with tab3:
         st.header("Automated Playbook Generator")
-        st.markdown("Generate comprehensive onboarding documentation from your code summaries.")
+        st.markdown("Generate comprehensive onboarding documentation from your code summaries using deep AI analysis.")
         
-        if 'code_summaries' not in st.session_state or not st.session_state['code_summaries']:
-            st.info("👈 Please analyze some code in the 'Codebase Architecture Summarizer' tab first!")
-        else:
-            summaries = st.session_state['code_summaries']
+        # Repository folder scanning section for Tab 3
+        st.subheader("Local Repository Scanner")
+        st.info("**Note:** This scans LOCAL repositories on your computer. To analyze a GitHub repository, first clone it to your local machine using: `git clone <repository-url>`")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            repo_path_tab3 = st.text_input(
+                "Enter Local Repository Path:",
+                placeholder="Example: C:/Users/YourName/Projects/my-repo",
+                help="Enter the full path to your local repository folder. Works with any cloned GitHub repo or local project.",
+                key="repo_path_tab3"
+            )
             
+            # Show current working directory as reference
+            st.caption(f"Current working directory: {os.getcwd()}")
+        
+        with col2:
+            st.markdown("###")
+            if st.button("Scan Repository", type="primary", use_container_width=True, key="scan_repo_tab3"):
+                if repo_path_tab3:
+                    with st.spinner(f"Scanning repository: {repo_path_tab3}..."):
+                        scan_result = repo_scanner.scan_repository(repo_path_tab3)
+                        
+                        if scan_result['success']:
+                            st.success(f"Successfully scanned {scan_result['stats']['total_files']} files!")
+                            
+                            # Analyze all scanned files
+                            with st.spinner("Analyzing code structure..."):
+                                summaries = []
+                                for file_data in scan_result['files']:
+                                    summary = code_summarizer.summarize_code(
+                                        file_data['content'],
+                                        file_data['filename']
+                                    )
+                                    summary['relative_path'] = file_data['relative_path']
+                                    summaries.append(summary)
+                                
+                                # Store in session state
+                                st.session_state.repo_analysis = {
+                                    'summaries': summaries,
+                                    'stats': scan_result['stats']
+                                }
+                        else:
+                            st.error(f"Error: {scan_result['error']}")
+                            st.info("**Troubleshooting Tips:**\n- Ensure the path exists and is correct\n- Use forward slashes (/) or double backslashes (\\\\)\n- Check that you have read permissions for the directory")
+                else:
+                    st.warning("Please enter a repository path.")
+        
+        st.markdown("---")
+        
+        if not st.session_state.repo_analysis:
+            st.info("Please scan a repository or analyze code in the 'Codebase Architecture Summarizer' tab first!")
+        else:
             col1, col2 = st.columns([3, 1])
             
             with col1:
@@ -751,17 +1052,28 @@ def main():
             
             with col2:
                 st.markdown("### Files Ready")
+                summaries = st.session_state.repo_analysis['summaries']
                 st.metric("Code Files", len(summaries))
             
-            if st.button("📖 Generate Playbook", type="primary", use_container_width=True):
-                with st.spinner("Generating onboarding playbook..."):
-                    playbook = playbook_generator.generate_playbook(summaries, project_name)
+            # Check for API key
+            if not api_key:
+                st.warning("**No Groq API Key Provided**: Playbook will use template-based generation. For deep AI-powered analysis, please add your Groq API key in the sidebar.")
+            else:
+                st.info("**Groq AI Enabled**: Playbook will be generated using deep AI analysis with llama-3.3-70b-versatile")
+            
+            if st.button("Generate Playbook", type="primary", use_container_width=True):
+                with st.spinner("Generating comprehensive onboarding playbook with deep AI analysis..."):
+                    playbook = playbook_generator.generate_playbook(
+                        st.session_state.repo_analysis,
+                        project_name
+                    )
                     st.session_state['playbook'] = playbook
+                    st.success("Playbook generated successfully!")
             
             # Display playbook
             if 'playbook' in st.session_state:
                 st.markdown("---")
-                st.subheader("📖 Generated Playbook")
+                st.subheader("Generated Playbook")
                 
                 # Display the playbook
                 st.markdown(st.session_state['playbook'])
@@ -772,7 +1084,7 @@ def main():
                 
                 with col1:
                     st.download_button(
-                        label="📥 Download as Markdown",
+                        label="Download as Markdown",
                         data=st.session_state['playbook'],
                         file_name=f"{project_name.replace(' ', '_')}_playbook.md",
                         mime="text/markdown"
@@ -799,7 +1111,7 @@ def main():
                     """
                     
                     st.download_button(
-                        label="📥 Download as HTML",
+                        label="Download as HTML",
                         data=html_content,
                         file_name=f"{project_name.replace(' ', '_')}_playbook.html",
                         mime="text/html"
