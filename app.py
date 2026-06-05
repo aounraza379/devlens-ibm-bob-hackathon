@@ -10,6 +10,9 @@ import json
 from datetime import datetime
 import re
 from pathlib import Path
+import tempfile
+import subprocess
+import shutil
 
 # NLP and ML imports
 try:
@@ -110,7 +113,7 @@ class RepositoryScanner:
         Recursively scan a repository and extract all code files
         
         Args:
-            repo_path: Path to the repository root
+            repo_path: Path to the repository root or GitHub URL
             
         Returns:
             Dictionary containing scanned files and metadata
@@ -119,28 +122,44 @@ class RepositoryScanner:
         self.total_lines = 0
         self.file_count = 0
         
-        # Normalize path
-        repo_path = os.path.normpath(repo_path.strip())
+        repo_path = repo_path.strip()
+        is_github_url = repo_path.startswith("http://github.com/") or repo_path.startswith("https://github.com/")
         
-        if not os.path.exists(repo_path):
-            return {
-                "success": False,
-                "error": f"Path does not exist: {repo_path}",
-                "files": [],
-                "stats": {}
-            }
-        
-        if not os.path.isdir(repo_path):
-            return {
-                "success": False,
-                "error": f"Path is not a directory: {repo_path}",
-                "files": [],
-                "stats": {}
-            }
+        temp_dir = None
+        if is_github_url:
+            temp_dir = tempfile.mkdtemp()
+            try:
+                subprocess.run(["git", "clone", repo_path, temp_dir], check=True, capture_output=True)
+                scan_path = temp_dir
+            except subprocess.CalledProcessError as e:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return {
+                    "success": False,
+                    "error": f"Failed to clone GitHub repository: {e.stderr.decode('utf-8', errors='ignore')}",
+                    "files": [],
+                    "stats": {}
+                }
+        else:
+            scan_path = os.path.normpath(repo_path)
+            if not os.path.exists(scan_path):
+                return {
+                    "success": False,
+                    "error": f"Path does not exist: {scan_path}",
+                    "files": [],
+                    "stats": {}
+                }
+            
+            if not os.path.isdir(scan_path):
+                return {
+                    "success": False,
+                    "error": f"Path is not a directory: {scan_path}",
+                    "files": [],
+                    "stats": {}
+                }
         
         try:
             # Walk through directory
-            for root, dirs, files in os.walk(repo_path):
+            for root, dirs, files in os.walk(scan_path):
                 # Filter out ignored directories
                 dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]
                 
@@ -156,7 +175,7 @@ class RepositoryScanner:
                                 lines = len(content.split('\n'))
                                 
                                 # Get relative path from repo root
-                                rel_path = os.path.relpath(file_path, repo_path)
+                                rel_path = os.path.relpath(file_path, scan_path)
                                 
                                 self.scanned_files.append({
                                     "filename": file,
@@ -173,6 +192,9 @@ class RepositoryScanner:
                             # Skip files that can't be read
                             continue
             
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
             return {
                 "success": True,
                 "files": self.scanned_files,
@@ -184,6 +206,8 @@ class RepositoryScanner:
             }
         
         except Exception as e:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             return {
                 "success": False,
                 "error": str(e),
@@ -792,16 +816,16 @@ def main():
         st.markdown("Scan a local repository or upload source code files to get clear architectural summaries and insights.")
         
         # Repository folder scanning section
-        st.subheader("Local Repository Scanner")
-        st.info("**Note:** This scans LOCAL repositories on your computer. To analyze a GitHub repository, first clone it to your local machine using: `git clone <repository-url>`")
+        st.subheader("Local or GitHub Repository Scanner")
+        st.info("**Note:** You can enter a local directory path OR a GitHub URL (e.g. `https://github.com/username/repo`).")
         
         col1, col2 = st.columns([3, 1])
         
         with col1:
             repo_path = st.text_input(
-                "Enter Local Repository Path:",
-                placeholder="Example: C:/Users/YourName/Projects/my-repo",
-                help="Enter the full path to your local repository folder. Works with any cloned GitHub repo or local project."
+                "Enter Local Repository Path or GitHub URL:",
+                placeholder="Example: C:/Users/YourName/Projects/my-repo OR https://github.com/...",
+                help="Enter the full path to your local repository folder OR a GitHub repository URL."
             )
             
             # Show current working directory as reference
@@ -988,16 +1012,16 @@ def main():
         st.markdown("Generate comprehensive onboarding documentation from your code summaries using deep AI analysis.")
         
         # Repository folder scanning section for Tab 3
-        st.subheader("Local Repository Scanner")
-        st.info("**Note:** This scans LOCAL repositories on your computer. To analyze a GitHub repository, first clone it to your local machine using: `git clone <repository-url>`")
+        st.subheader("Local or GitHub Repository Scanner")
+        st.info("**Note:** You can enter a local directory path OR a GitHub URL (e.g. `https://github.com/username/repo`).")
         
         col1, col2 = st.columns([3, 1])
         
         with col1:
             repo_path_tab3 = st.text_input(
-                "Enter Local Repository Path:",
-                placeholder="Example: C:/Users/YourName/Projects/my-repo",
-                help="Enter the full path to your local repository folder. Works with any cloned GitHub repo or local project.",
+                "Enter Local Repository Path or GitHub URL:",
+                placeholder="Example: C:/Users/YourName/Projects/my-repo OR https://github.com/...",
+                help="Enter the full path to your local repository folder OR a GitHub repository URL.",
                 key="repo_path_tab3"
             )
             
@@ -1092,6 +1116,7 @@ def main():
                 
                 with col2:
                     # Convert to HTML for download
+                    playbook_html = st.session_state['playbook'].replace('\n', '<br>')
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -1105,7 +1130,7 @@ def main():
                         </style>
                     </head>
                     <body>
-                        {st.session_state['playbook'].replace('\n', '<br>')}
+                        {playbook_html}
                     </body>
                     </html>
                     """
