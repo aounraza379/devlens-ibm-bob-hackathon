@@ -1117,7 +1117,7 @@ def main():
             if not api_key:
                 st.info("Built-in playbook generation is active. Add an AI enhancement key for a more detailed result.")
             else:
-                st.info("AI-enhanced playbook generation is active.")
+                st.info("AI key detected. The connection will be verified when you generate the playbook.")
             
             if st.button("Generate Playbook", type="primary", use_container_width=True):
                 with st.spinner("Generating comprehensive onboarding playbook with deep AI analysis..."):
