@@ -385,9 +385,10 @@ class CodeSummarizer:
         if not code or not code.strip():
             return {
                 "summary": "Empty code file",
-                "structure": {},
+                "structure": {"classes": [], "functions": [], "imports": [], "comments": []},
                 "complexity": "Low",
-                "lines": 0
+                "lines": 0,
+                "filename": filename
             }
         
         # Extract structure
@@ -555,11 +556,12 @@ Generate a professional, well-structured playbook with clear sections, code exam
         # File summaries with full details
         context_parts.append("File Analysis:")
         for i, summary in enumerate(summaries, 1):
-            context_parts.append(f"\n{i}. {summary['filename']}")
+            filename = summary.get('filename', 'Unnamed file')
+            context_parts.append(f"\n{i}. {filename}")
             context_parts.append(f"   Path: {summary.get('relative_path', 'N/A')}")
-            context_parts.append(f"   Lines: {summary['lines']}")
-            context_parts.append(f"   Complexity: {summary['complexity']}")
-            context_parts.append(f"   Summary: {summary['summary']}")
+            context_parts.append(f"   Lines: {summary.get('lines', 0)}")
+            context_parts.append(f"   Complexity: {summary.get('complexity', 'Unknown')}")
+            context_parts.append(f"   Summary: {summary.get('summary', 'No summary available')}")
             
             structure = summary.get('structure', {})
             if structure.get('classes'):
@@ -586,10 +588,11 @@ Generate a professional, well-structured playbook with clear sections, code exam
         playbook += "## Architecture Summary\n\n"
         
         for summary in summaries:
-            playbook += f"### {summary['filename']}\n\n"
-            playbook += f"**Path:** `{summary.get('relative_path', summary['filename'])}`\n\n"
+            filename = summary.get('filename', 'Unnamed file')
+            playbook += f"### {filename}\n\n"
+            playbook += f"**Path:** `{summary.get('relative_path', filename)}`\n\n"
             playbook += f"**Complexity:** {summary.get('complexity', 'Unknown')}\n\n"
-            playbook += f"**Summary:** {summary['summary']}\n\n"
+            playbook += f"**Summary:** {summary.get('summary', 'No summary available')}\n\n"
             
             structure = summary.get('structure', {})
             if structure.get('classes'):
@@ -651,6 +654,7 @@ def main():
     # Initialize session state for repo analysis
     if 'repo_analysis' not in st.session_state:
         st.session_state.repo_analysis = None
+    st.session_state.ai_fallback_notice_shown = False
     
     # Header
     st.markdown('<div class="main-header">DevLens</div>', unsafe_allow_html=True)
@@ -1005,7 +1009,9 @@ def main():
             st.subheader("File Summaries")
             
             for summary in summaries:
-                with st.expander(f"{summary['filename']} - {summary['complexity']} Complexity"):
+                filename = summary.get('filename', 'Unnamed file')
+                complexity = summary.get('complexity', 'Unknown')
+                with st.expander(f"{filename} - {complexity} Complexity"):
                     if 'relative_path' in summary:
                         st.markdown(f"**Path:** `{summary['relative_path']}`")
                     st.markdown(f"**Summary:** {summary['summary']}")
