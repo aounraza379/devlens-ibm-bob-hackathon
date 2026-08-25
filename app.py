@@ -661,15 +661,20 @@ def main():
         st.header("Configuration")
         
         configured_api_key = get_configured_api_key()
-        api_key = st.text_input(
+        entered_api_key = st.text_input(
             "AI enhancement key (Optional)",
             type="password",
-            value=configured_api_key,
+            placeholder="Enter a key for this session",
             help="Optional. DevLens also reads GROQ_API_KEY from Streamlit secrets or environment variables."
         )
+        api_key = entered_api_key.strip() or configured_api_key
         
         if not api_key:
             st.caption("Built-in analysis is active. Add an AI key for richer summaries and playbooks.")
+        elif not entered_api_key:
+            st.caption("Managed AI enhancement is active. Leave this field blank to keep using it.")
+        else:
+            st.caption("Using the key entered for this session. Clear it to return to the managed key.")
         
         st.markdown("---")
         st.markdown("### About DevLens")
@@ -964,8 +969,8 @@ def main():
                 st.metric("Files Analyzed", stats.get('total_files', len(summaries)))
                 st.metric("Total Lines", stats.get('total_lines', sum(s['lines'] for s in summaries)))
                 
-                total_classes = sum(len(s['structure']['classes']) for s in summaries)
-                total_functions = sum(len(s['structure']['functions']) for s in summaries)
+                total_classes = sum(len(s.get('structure', {}).get('classes', [])) for s in summaries)
+                total_functions = sum(len(s.get('structure', {}).get('functions', [])) for s in summaries)
                 
                 st.metric("Classes", total_classes)
                 st.metric("Functions", total_functions)
@@ -1010,20 +1015,21 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        if summary['structure']['classes']:
+                        structure = summary.get('structure', {})
+                        if structure.get('classes'):
                             st.markdown("**Classes:**")
-                            for cls in summary['structure']['classes']:
+                            for cls in structure['classes']:
                                 st.markdown(f"- `{cls}`")
                     
                     with col2:
-                        if summary['structure']['functions']:
+                        if structure.get('functions'):
                             st.markdown("**Functions:**")
-                            for func in summary['structure']['functions'][:10]:
+                            for func in structure['functions'][:10]:
                                 st.markdown(f"- `{func}`")
                     
-                    if summary['structure']['imports']:
+                    if structure.get('imports'):
                         st.markdown("**Key Imports:**")
-                        for imp in summary['structure']['imports'][:5]:
+                        for imp in structure['imports'][:5]:
                             st.code(imp, language='python')
     
     # ========================================================================
