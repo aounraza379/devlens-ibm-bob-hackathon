@@ -14,6 +14,24 @@ import tempfile
 import subprocess
 import shutil
 
+GROQ_MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+
+def get_configured_api_key() -> str:
+    """Read the Groq key from Streamlit secrets or the environment."""
+    try:
+        secret_key = st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        secret_key = ""
+    return str(secret_key or os.getenv("GROQ_API_KEY", "") or "").strip()
+
+
+def show_ai_fallback_notice() -> None:
+    """Explain the fallback without exposing provider error details."""
+    if not st.session_state.get("ai_fallback_notice_shown", False):
+        st.info("AI enhancement is temporarily unavailable, so DevLens used its built-in analysis instead.")
+        st.session_state.ai_fallback_notice_shown = True
+
 # NLP and ML imports
 try:
     from textblob import TextBlob
@@ -323,8 +341,8 @@ class CodeSummarizer:
             try:
                 self.groq_client = Groq(api_key=api_key)
                 self.use_groq = True
-            except Exception as e:
-                st.warning(f"Groq client initialization failed: {e}")
+            except Exception:
+                self.groq_client = None
     
     def extract_code_structure(self, code: str) -> Dict:
         """Extract structural information from code"""
@@ -413,13 +431,13 @@ class CodeSummarizer:
                             "content": f"Summarize this code file '{filename}':\n\n{code[:2000]}"
                         }
                     ],
-                    model="llama-3.3-70b-versatile",
+                    model=GROQ_MODEL,
                     temperature=0.3,
                     max_tokens=150
                 )
                 return chat_completion.choices[0].message.content.strip()
-            except Exception as e:
-                st.warning(f"Groq API error: {e}")
+            except Exception:
+                show_ai_fallback_notice()
         
         # Fallback: rule-based summary
         summary_parts = [f"File '{filename}' contains:"]
@@ -446,13 +464,14 @@ class PlaybookGenerator:
         self.api_key = api_key
         self.use_groq = False
         self.groq_client = None
+        self.used_fallback = False
         
         if api_key:
             try:
                 self.groq_client = Groq(api_key=api_key)
                 self.use_groq = True
-            except Exception as e:
-                st.warning(f"Groq client initialization failed: {e}")
+            except Exception:
+                self.groq_client = None
     
     def generate_playbook(self, repo_analysis: Dict, project_name: str = "Project") -> str:
         """
@@ -507,18 +526,20 @@ Generate a professional, well-structured playbook with clear sections, code exam
                             "content": prompt
                         }
                     ],
-                    model="llama-3.3-70b-versatile",
+                    model=GROQ_MODEL,
                     temperature=0.6,
                     max_tokens=4000
                 )
                 
                 return chat_completion.choices[0].message.content.strip()
                 
-            except Exception as e:
-                st.error(f"Groq API error: {e}")
+            except Exception:
+                self.used_fallback = True
+                show_ai_fallback_notice()
                 return self._generate_fallback_playbook(summaries, project_name, repo_analysis)
         else:
             # Fallback if no API key
+            self.used_fallback = True
             return self._generate_fallback_playbook(summaries, project_name, repo_analysis)
     
     def _prepare_context(self, summaries: List[Dict], repo_analysis: Dict) -> str:
@@ -639,15 +660,16 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         
-        # API Key input (optional)
+        configured_api_key = get_configured_api_key()
         api_key = st.text_input(
-            "Groq API Key (Optional)",
+            "AI enhancement key (Optional)",
             type="password",
-            help="For enhanced summarization and playbook generation using Groq's fast LLM inference"
+            value=configured_api_key,
+            help="Optional. DevLens also reads GROQ_API_KEY from Streamlit secrets or environment variables."
         )
         
         if not api_key:
-            st.warning("No Groq API key provided. Using fallback templates for playbook generation.")
+            st.caption("Built-in analysis is active. Add an AI key for richer summaries and playbooks.")
         
         st.markdown("---")
         st.markdown("### About DevLens")
@@ -1081,9 +1103,9 @@ def main():
             
             # Check for API key
             if not api_key:
-                st.warning("**No Groq API Key Provided**: Playbook will use template-based generation. For deep AI-powered analysis, please add your Groq API key in the sidebar.")
+                st.info("Built-in playbook generation is active. Add an AI enhancement key for a more detailed result.")
             else:
-                st.info("**Groq AI Enabled**: Playbook will be generated using deep AI analysis with llama-3.3-70b-versatile")
+                st.info("AI-enhanced playbook generation is active.")
             
             if st.button("Generate Playbook", type="primary", use_container_width=True):
                 with st.spinner("Generating comprehensive onboarding playbook with deep AI analysis..."):
@@ -1092,7 +1114,10 @@ def main():
                         project_name
                     )
                     st.session_state['playbook'] = playbook
-                    st.success("Playbook generated successfully!")
+                    if playbook_generator.used_fallback:
+                        st.success("Playbook generated with DevLens built-in analysis.")
+                    else:
+                        st.success("AI-enhanced playbook generated successfully.")
             
             # Display playbook
             if 'playbook' in st.session_state:
